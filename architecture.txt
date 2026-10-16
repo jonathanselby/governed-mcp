@@ -1,0 +1,51 @@
+GOVERNED MCP V0.1
+
+TRUSTED MCP CLIENT HOST
+  supplies protocol envelope + agent/human attribution
+                |
+                | JSON-RPC 2.0 over stdio
+                v
++--------------------------------------------------+
+| governed-mcp                                     |
+|                                                  |
+|  1. establish one protocol era                   |
+|     modern: server/discover 2026-07-28           |
+|     legacy: initialize 2025-11-25                |
+|                                                  |
+|  2. validate framing / modern request envelope   |
+|                                                  |
+|  3. expose configured tools only                 |
+|     deterministic tools/list                     |
+|                                                  |
+|  4. tools/call                                   |
+|     - require actor + named human                |
+|     - apply configured actor scope before I/O    |
+|     - read     -> preserve read command          |
+|     - proposal -> add command: propose           |
++-------------------------+------------------------+
+                          |
+                          | HTTP POST
+                          v
++--------------------------------------------------+
+| EXISTING APPLICATION COMMAND API                 |
+| owns business authorisation, workflow and state  |
++--------------------------------------------------+
+
+AUDIT STREAM
+  every handled request -> stderr
+
+MODERN RESPONSE RULES
+  server identity -> response _meta
+  cacheable results -> ttlMs: 0, cacheScope: private
+
+FAILURE RULES
+  bad protocol revision      -> JSON-RPC -32022
+  malformed / missing meta   -> reject before downstream
+  unknown / disallowed tool  -> reject before downstream
+  downstream failure         -> tool result with isError: true
+
+NON-GOALS
+  no second approval system
+  no Streamable HTTP / OAuth
+  no prompts/resources/subscriptions
+  no durable queue or audit store

@@ -1,0 +1,1 @@
+{"endpoint":"http://127.0.0.1:8080","tools":[{"name":"incident_status","description":"Read incident status","mode":"read","path":"api/status"},{"name":"propose_fact","description":"Propose a new fact","mode":"proposal","path":"api/commands"}]}

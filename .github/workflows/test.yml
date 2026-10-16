@@ -4,9 +4,6 @@ on:
   push:
   pull_request:
 
-permissions:
-  contents: read
-
 jobs:
   go-test:
     runs-on: ubuntu-latest
@@ -15,22 +12,30 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.x'
+      - name: Format contract
+        run: test -z "$(gofmt -l .)"
       - name: Vet
         run: go vet ./...
       - name: Unit tests with race detector
-        run: go test -race ./...
+        run: go test -race -count=1 ./...
       - name: Build
         run: go build -o ./bin/governed-mcp ./cmd/governed-mcp
       - name: Version contract
         run: test "$(./bin/governed-mcp -version)" = "governed-mcp 0.1.0"
       - name: Linux arm64 build
         run: GOOS=linux GOARCH=arm64 go build -o ./bin/governed-mcp-linux-arm64 ./cmd/governed-mcp
-      - name: Bafflewick acceptance
+      - name: Bafflewick modern-session acceptance
         shell: bash
         run: |
-          discover=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}' | ./bin/governed-mcp -config examples/bafflewick/config.json 2>/dev/null)
-          echo "$discover" | grep -q '2026-07-28'
-          tools=$(printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}' | ./bin/governed-mcp -config examples/bafflewick/config.json 2>/dev/null)
-          echo "$tools" | grep -q 'propose_fact'
-          malformed=$(printf '%s\n' '{not-json' | ./bin/governed-mcp -config examples/bafflewick/config.json 2>/dev/null)
-          echo "$malformed" | grep -q '"code":-32700'
+          set -euo pipefail
+          ./bin/governed-mcp -config examples/bafflewick/config.json \
+            < examples/bafflewick/modern-session.jsonl \
+            > /tmp/responses.jsonl 2> /tmp/audit.jsonl
+          test "$(wc -l < /tmp/responses.jsonl)" -eq 2
+          test "$(wc -l < /tmp/audit.jsonl)" -eq 2
+          grep -q '2026-07-28' /tmp/responses.jsonl
+          grep -q '"ttlMs":0' /tmp/responses.jsonl
+          grep -q '"cacheScope":"private"' /tmp/responses.jsonl
+          grep -q 'io.modelcontextprotocol/serverInfo' /tmp/responses.jsonl
+          grep -q 'incident_status' /tmp/responses.jsonl
+          grep -q 'propose_fact' /tmp/responses.jsonl
