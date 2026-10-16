@@ -1,0 +1,36 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  go-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+      - name: Vet
+        run: go vet ./...
+      - name: Unit tests with race detector
+        run: go test -race ./...
+      - name: Build
+        run: go build -o ./bin/governed-mcp ./cmd/governed-mcp
+      - name: Version contract
+        run: test "$(./bin/governed-mcp -version)" = "governed-mcp 0.1.0"
+      - name: Linux arm64 build
+        run: GOOS=linux GOARCH=arm64 go build -o ./bin/governed-mcp-linux-arm64 ./cmd/governed-mcp
+      - name: Bafflewick acceptance
+        shell: bash
+        run: |
+          discover=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}' | ./bin/governed-mcp -config examples/bafflewick/config.json 2>/dev/null)
+          echo "$discover" | grep -q '2026-07-28'
+          tools=$(printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}' | ./bin/governed-mcp -config examples/bafflewick/config.json 2>/dev/null)
+          echo "$tools" | grep -q 'propose_fact'
+          malformed=$(printf '%s\n' '{not-json' | ./bin/governed-mcp -config examples/bafflewick/config.json 2>/dev/null)
+          echo "$malformed" | grep -q '"code":-32700'
