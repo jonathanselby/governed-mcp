@@ -43,4 +43,6 @@ jobs:
           PY
           git add generated
           git commit -m "Add code-derived design evidence"
+          git tag -f v0.1.0
           git push origin HEAD:main
+          git push --force origin v0.1.0
