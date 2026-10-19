@@ -6,8 +6,6 @@
 
 `governed-mcp` is a deliberately small Go adapter for exposing an existing application command API as a governed MCP tool surface. It is designed for applications that already own authorisation, workflow and approval state and do not want an MCP edge to become a second control plane.
 
-It is independently usable; CRAB is one consumer, not part of the component contract.
-
 ## What V0.1 proves
 
 V0.1 demonstrates that a tools-only MCP edge can remain thin while preserving four controls:
