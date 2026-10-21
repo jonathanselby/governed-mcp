@@ -27,6 +27,8 @@ const (
 
 	EraModern = "modern"
 	EraLegacy = "legacy"
+
+	MaxDownstreamResponseBytes = 1 << 20
 )
 
 const unsupportedProtocolVersionCode = -32022
@@ -116,9 +118,12 @@ func (h HTTPClient) Do(ctx context.Context, method, path string, payload any) (j
 		return nil, err
 	}
 	defer resp.Body.Close()
-	rb, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	rb, err := io.ReadAll(io.LimitReader(resp.Body, MaxDownstreamResponseBytes+1))
 	if err != nil {
 		return nil, err
+	}
+	if len(rb) > MaxDownstreamResponseBytes {
+		return nil, fmt.Errorf("downstream response exceeds %d bytes", MaxDownstreamResponseBytes)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("downstream status %d", resp.StatusCode)
@@ -408,7 +413,7 @@ func find(xs []Tool, name string) (Tool, bool) {
 
 func allowed(xs []string, actor string) bool {
 	if len(xs) == 0 {
-		return true
+		return false
 	}
 	for _, x := range xs {
 		if x == actor {
@@ -426,8 +431,15 @@ func ValidateConfig(c Config) error {
 	}
 	seen := map[string]bool{}
 	for _, t := range c.Tools {
-		if t.Name == "" || t.Path == "" || (t.Mode != "read" && t.Mode != "proposal") || seen[t.Name] {
+		if t.Name == "" || t.Path == "" || (t.Mode != "read" && t.Mode != "proposal") || seen[t.Name] || len(t.AllowedActors) == 0 {
 			return ErrBadConfig
+		}
+		actors := map[string]bool{}
+		for _, actor := range t.AllowedActors {
+			if strings.TrimSpace(actor) == "" || actors[actor] {
+				return ErrBadConfig
+			}
+			actors[actor] = true
 		}
 		seen[t.Name] = true
 	}

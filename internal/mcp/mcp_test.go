@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -121,7 +124,7 @@ func TestModernEnvelopeRequiredOnEveryRequest(t *testing.T) {
 }
 
 func TestToolsListDeterministicAndCacheable(t *testing.T) {
-	s := &Server{Config: Config{Endpoint: "x", Tools: []Tool{{Name: "z", Mode: "read", Path: "z"}, {Name: "a", Mode: "read", Path: "a"}}}}
+	s := &Server{Config: Config{Endpoint: "x", Tools: []Tool{{Name: "z", Mode: "read", Path: "z", AllowedActors: []string{"agent"}}, {Name: "a", Mode: "read", Path: "a", AllowedActors: []string{"agent"}}}}}
 	establishModern(t, s)
 	resp, _ := s.Handle(context.Background(), Request{JSONRPC: "2.0", ID: 2, Method: "tools/list", Params: params(map[string]any{"_meta": modernMeta(nil)})})
 	if resp.Error != nil {
@@ -139,7 +142,7 @@ func TestToolsListDeterministicAndCacheable(t *testing.T) {
 
 func TestProposalBoundary(t *testing.T) {
 	f := &fake{}
-	s := &Server{Config: Config{Endpoint: "http://local", Tools: []Tool{{Name: "update", Mode: "proposal", Path: "commands"}}}, Client: f}
+	s := &Server{Config: Config{Endpoint: "http://local", Tools: []Tool{{Name: "update", Mode: "proposal", Path: "commands", AllowedActors: []string{"agent-1"}}}}, Client: f}
 	establishModern(t, s)
 	resp, audit := s.Handle(context.Background(), call("update", "agent-1", "major-1"))
 	if resp.Error != nil || audit.Outcome != "accepted" {
@@ -160,7 +163,7 @@ func TestProposalBoundary(t *testing.T) {
 
 func TestReadToolDoesNotInventMutationCommand(t *testing.T) {
 	f := &fake{}
-	s := &Server{Config: Config{Endpoint: "x", Tools: []Tool{{Name: "read", Mode: "read", Path: "r"}}}, Client: f}
+	s := &Server{Config: Config{Endpoint: "x", Tools: []Tool{{Name: "read", Mode: "read", Path: "r", AllowedActors: []string{"agent"}}}}, Client: f}
 	establishModern(t, s)
 	resp, _ := s.Handle(context.Background(), call("read", "agent", "major"))
 	if resp.Error != nil {
@@ -186,9 +189,19 @@ func TestUnknownAndDisallowedRefusedWithoutDownstream(t *testing.T) {
 	}
 }
 
-func TestHumanMetadataRequired(t *testing.T) {
+func TestEmptyAllowListFailsClosed(t *testing.T) {
 	f := &fake{}
 	s := &Server{Config: Config{Endpoint: "x", Tools: []Tool{{Name: "read", Mode: "read", Path: "r"}}}, Client: f}
+	establishModern(t, s)
+	resp, _ := s.Handle(context.Background(), call("read", "agent", "major"))
+	if resp.Error == nil || f.calls != 0 {
+		t.Fatalf("empty allow-list failed open: error=%+v calls=%d", resp.Error, f.calls)
+	}
+}
+
+func TestHumanMetadataRequired(t *testing.T) {
+	f := &fake{}
+	s := &Server{Config: Config{Endpoint: "x", Tools: []Tool{{Name: "read", Mode: "read", Path: "r", AllowedActors: []string{"agent"}}}}, Client: f}
 	establishModern(t, s)
 	resp, _ := s.Handle(context.Background(), call("read", "agent", ""))
 	if resp.Error == nil {
@@ -201,7 +214,7 @@ func TestHumanMetadataRequired(t *testing.T) {
 
 func TestMalformedParamsRefusedWithoutDownstream(t *testing.T) {
 	f := &fake{}
-	s := &Server{Config: Config{Endpoint: "x", Tools: []Tool{{Name: "read", Mode: "read", Path: "r"}}}, Client: f}
+	s := &Server{Config: Config{Endpoint: "x", Tools: []Tool{{Name: "read", Mode: "read", Path: "r", AllowedActors: []string{"agent"}}}}, Client: f}
 	establishModern(t, s)
 	r := Request{JSONRPC: "2.0", ID: 2, Method: "tools/call", Params: json.RawMessage(`{"_meta":`)}
 	resp, _ := s.Handle(context.Background(), r)
@@ -212,7 +225,7 @@ func TestMalformedParamsRefusedWithoutDownstream(t *testing.T) {
 
 func TestDownstreamFailureIsToolError(t *testing.T) {
 	f := &fake{err: errors.New("application unavailable")}
-	s := &Server{Config: Config{Endpoint: "x", Tools: []Tool{{Name: "read", Mode: "read", Path: "r"}}}, Client: f}
+	s := &Server{Config: Config{Endpoint: "x", Tools: []Tool{{Name: "read", Mode: "read", Path: "r", AllowedActors: []string{"agent"}}}}, Client: f}
 	establishModern(t, s)
 	resp, audit := s.Handle(context.Background(), call("read", "agent", "major"))
 	if resp.Error != nil || audit.Outcome != "failed" {
@@ -220,6 +233,18 @@ func TestDownstreamFailureIsToolError(t *testing.T) {
 	}
 	if resp.Result.(map[string]any)["isError"] != true {
 		t.Fatalf("expected tool error: %#v", resp.Result)
+	}
+}
+
+func TestHTTPClientRejectsOversizedResponse(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"payload":"` + strings.Repeat("x", MaxDownstreamResponseBytes) + `"}`))
+	}))
+	defer ts.Close()
+	client := HTTPClient{Endpoint: ts.URL, Client: ts.Client()}
+	if _, err := client.Do(context.Background(), http.MethodPost, "/", map[string]any{}); err == nil {
+		t.Fatal("oversized downstream response accepted")
 	}
 }
 
@@ -234,14 +259,16 @@ func TestEraCannotSwitchMidConnection(t *testing.T) {
 }
 
 func TestValidateConfig(t *testing.T) {
-	valid := Config{Endpoint: "http://127.0.0.1", Tools: []Tool{{Name: "read", Mode: "read", Path: "r"}, {Name: "write", Mode: "proposal", Path: "w"}}}
+	valid := Config{Endpoint: "http://127.0.0.1", Tools: []Tool{{Name: "read", Mode: "read", Path: "r", AllowedActors: []string{"agent-a"}}, {Name: "write", Mode: "proposal", Path: "w", AllowedActors: []string{"agent-a"}}}}
 	if err := ValidateConfig(valid); err != nil {
 		t.Fatalf("valid config rejected: %v", err)
 	}
 	bad := []Config{
 		{},
-		{Endpoint: "x", Tools: []Tool{{Name: "read", Mode: "mutate", Path: "r"}}},
-		{Endpoint: "x", Tools: []Tool{{Name: "same", Mode: "read", Path: "r"}, {Name: "same", Mode: "read", Path: "r2"}}},
+		{Endpoint: "x", Tools: []Tool{{Name: "read", Mode: "mutate", Path: "r", AllowedActors: []string{"agent"}}}},
+		{Endpoint: "x", Tools: []Tool{{Name: "same", Mode: "read", Path: "r", AllowedActors: []string{"agent"}}, {Name: "same", Mode: "read", Path: "r2", AllowedActors: []string{"agent"}}}},
+		{Endpoint: "x", Tools: []Tool{{Name: "read", Mode: "read", Path: "r"}}},
+		{Endpoint: "x", Tools: []Tool{{Name: "read", Mode: "read", Path: "r", AllowedActors: []string{"agent", "agent"}}}},
 	}
 	for i, c := range bad {
 		if err := ValidateConfig(c); err == nil {
